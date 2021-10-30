@@ -32,7 +32,7 @@ __revision__ = '$Format:%H$'
 
 
 from qgis.PyQt.QtCore import QCoreApplication, QVariant
-from qgis.core import (QgsFeatureSink, QgsCoordinateReferenceSystem, QgsProcessing, QgsProcessingAlgorithm, QgsProcessingParameterFile, QgsProcessingParameterFeatureSink, QgsProcessingFeedback)
+from qgis.core import (QgsFeatureSink, QgsCoordinateReferenceSystem, QgsProcessing, QgsProcessingAlgorithm, QgsProcessingParameterFile, QgsProcessingParameterString, QgsProcessingParameterCrs, QgsProcessingParameterFeatureSink, QgsProcessingFeedback)
 from qgis import processing
 
 from twarc.client2 import Twarc2, expansions
@@ -45,12 +45,14 @@ class HydrateGeoTweetsAlgorithm(QgsProcessingAlgorithm):
 
     
 #reference parameters for calling alogorithm
+    CRS = 'CRS'
+    TOKEN = 'TOKEN'
     OUTPUT = 'OUTPUT'
     INPUT = 'INPUT'
 
     def initAlgorithm(self, config=None):
 
-#importing csv of tweet IDs
+        #importing csv of tweet IDs
         self.addParameter(
             QgsProcessingParameterFile(
                 self.INPUT,
@@ -58,8 +60,18 @@ class HydrateGeoTweetsAlgorithm(QgsProcessingAlgorithm):
                 extension='csv'
             )
         )
-
-#output point layer
+        #specify users Twitter bearer token
+        self.addParameter(QgsProcessingParameterString(
+            self.TOKEN,
+            self.tr('Input your Twitter API Bearer Token')
+        ))
+        #specify desired CRS of tweet points
+        self.addParameter(
+            QgsProcessingParameterCrs(
+                self.CRS, self.tr('Desired CRS of points')
+            )
+        )
+        #output point layer
         self.addParameter(
             QgsProcessingParameterFeatureSink(
                 self.OUTPUT,
@@ -69,37 +81,39 @@ class HydrateGeoTweetsAlgorithm(QgsProcessingAlgorithm):
         )
 
     def processAlgorithm(self, parameters, context, feedback):
-        
+        bearer_token = self.parameterAsString(parameters, self.TOKEN, context)
+        crsgeometry = self.parameterAsCrs(parameters, self.CRS, context)
         #specifying users file paths to the path of input
         filePathFile = self.parameterDefinition('INPUT').valueAsPythonString(parameters['INPUT'], context)
         in_path = os.path.dirname(filePathFile[1:]) + '/'
         
-#asking user to specify a file to import        
+        #asking user to specify a file to import        
         tweet_idsFile = self.parameterAsFile(parameters, self.INPUT, 
  context)
-       # open_tweet_ids = csv.reader(tweet_idsFile)
-#token you need to request from twitter API
-        t = Twarc2(bearer_token="input your bearer token here")
+        #token you need to request from twitter API
+        t = Twarc2(bearer_token=bearer_token)
 
-#iterating over CSV using twarc to hydrate each Tweet ID
+        #iterating over CSV using twarc to hydrate each Tweet ID
         with open(tweet_idsFile, "r") as f:
             #splitting tweets into sepearate lines
             all_tweet_ids = f.read().splitlines()
         #calling twarc to hydrate split tweet IDs
         lookup = t.tweet_lookup(tweet_ids=all_tweet_ids)
-        #for each page of retrieved metadata
-        for page in lookup:
-            #flatten into a single line
-            result = expansions.flatten(page)
-            #for each tweet in a line
-            for tweet in result:
-                #open results and write as jsonl
-                with open((in_path + "tweet_results.jsonl"), "a+") as f:
+
+        with open((in_path + "tweet_results.jsonl"), "w+") as f:
+            #for each page of retrieved metadata
+            for page in lookup:
+                #flatten into a single line
+                result = expansions.flatten(page)
+                #for each tweet in results
+                for i, tweet in enumerate(result):
+                    #write each tweet meatadata as a new line in jsonl
                     f.write(json.dumps(tweet) + "\n")
+                
         
         
 
-#converting JSONL to CSV to get coordinate pairs
+        #converting JSONL to CSV to get coordinate pairs
         with open((in_path + "tweet_results.jsonl"), "r") as infile:
             with open((in_path + "output.csv"), "w") as outfile:
                 convert = CSVConverter(infile, outfile, json_encode_all=True, json_encode_lists=True, json_encode_text=False, inline_referenced_tweets=True, allow_duplicates=False, batch_size=1000)
@@ -122,7 +136,7 @@ class HydrateGeoTweetsAlgorithm(QgsProcessingAlgorithm):
                 'YFIELD':'geox',
                 'ZFIELD':'',
                 'MFIELD':'',
-                'TARGET_CRS':QgsCoordinateReferenceSystem('ESPG:3857'),
+                'TARGET_CRS':QgsCoordinateReferenceSystem(crsgeometry),
                 'OUTPUT':parameters['OUTPUT']}, is_child_algorithm=True,
                 context=context,
                 feedback=feedback)
